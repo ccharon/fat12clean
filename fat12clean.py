@@ -118,26 +118,27 @@ def read_file_system(f, boot_sector):
     print(f"Number of FATs: {boot_sector.number_of_fats}")
     print(f"Sectors Per FAT: {boot_sector.sectors_per_fat_short}")
     print(f"Calculated Root Directory Start Sector: {root_dir_start_sector}")
-    read_root_directory(f, file_system.root, root_dir_start_sector, boot_sector)
+    read_directory(f, file_system.root, root_dir_start_sector, boot_sector, True)
 
     return file_system
 
 
-def read_directory(f, directory, start_sector, boot_sector):
+def read_directory(f, directory, start_sector, boot_sector, is_root=False):
     f.seek(start_sector * 512)  # Correctly align to the start of the directory
-    entries_to_read = boot_sector.sectors_per_cluster * 512 // 32
+    entries_to_read = boot_sector.root_entries if is_root else boot_sector.sectors_per_cluster * 512 // 32
+    subdirectories = []
 
     for _ in range(entries_to_read):
         raw_entry = f.read(32)
-        if len(raw_entry) < 32:
-            break  # End of directory
+
+        if raw_entry == b'\x00' * 32:
+            continue  # Skip empty entry
+
+        if raw_entry[0] == b'\xe5'[0]:
+            continue  # Skip deleted entry
+
         entry = DirectoryEntry(raw_entry)
-        if len(entry.name) == 0:
-            break  # End of directory
-        if entry.name[0] == '\x00':
-            break  # Unused entry
-        if entry.name[0] == '\xE5':
-            continue  # Deleted entry
+
         if entry.is_directory():  # Directory entry
             new_directory = Directory(entry.name)
             directory.directories.append(new_directory)
@@ -153,60 +154,6 @@ def read_directory(f, directory, start_sector, boot_sector):
         else:  # File entry
             file = File(entry.name, entry.size, entry.first_cluster)
             directory.files.append(file)
-
-
-def read_root_directory(f, directory, start_sector, boot_sector):
-    f.seek(start_sector * 512)  # Correctly align to the start of the root directory
-    entries_to_read = boot_sector.root_entries
-    subdirectories = []
-
-    for _ in range(entries_to_read):
-        raw_entry = f.read(32)
-        if len(raw_entry) < 32:
-            break  # End of directory
-        entry = DirectoryEntry(raw_entry)
-        print(entry)  # Print the details of the entry
-        if len(entry.name) == 0:
-            break  # End of directory
-        if entry.name[0] == '\x00':
-            break  # Unused entry
-        if entry.name[0] == '\xE5':
-            continue  # Deleted entry
-        if entry.is_directory():  # Directory entry
-            new_directory = Directory(entry.name)
-            directory.directories.append(new_directory)
-            first_cluster = entry.first_cluster
-
-            sectors_per_fat = boot_sector.sectors_per_fat_short
-            reserved_sectors = boot_sector.reserved_sectors
-            number_of_fats = boot_sector.number_of_fats
-            sectors_per_cluster = boot_sector.sectors_per_cluster
-            start_sector = first_cluster * sectors_per_cluster + reserved_sectors + number_of_fats * sectors_per_fat
-            subdirectories.append((f, new_directory, start_sector, boot_sector))
-
-        else:  # File entry
-            file = File(entry.name, entry.size, entry.first_cluster)
-            directory.files.append(file)
-
-    for subdirectory in subdirectories:
-        read_directory(*subdirectory)
-
-
-def read_clusters(f, first_cluster):
-    clusters = [first_cluster]
-    next_cluster = first_cluster
-    while next_cluster < 0xFF8:  # 0xFF8 to 0xFFF means last cluster of file
-        fat_offset = next_cluster + (next_cluster // 2)  # Multiply by 1.5
-        f.seek(512 + fat_offset)
-        fat_entry = f.read(3)
-        if next_cluster & 0x0001:  # Odd cluster number
-            next_cluster = ((fat_entry[2] << 8) | (fat_entry[1] & 0x0F)) << 4
-        else:  # Even cluster number
-            next_cluster = ((fat_entry[1] & 0xF0) << 8) | fat_entry[0]
-        if next_cluster >= 0xFF8:
-            break
-        clusters.append(next_cluster)
-    return clusters
 
 
 def main():
